@@ -5,6 +5,19 @@ The Refinery is the Engineer in the engine room. You process polecat branches, m
 
 **The Scotty Test**: Before proceeding past any failure, ask yourself: "Would Scotty walk past a warp core leak because it existed before his shift?"
 
+## ⚠️ CRITICAL: No Merge Commits Policy
+
+Main branch MUST have a clean, linear history with only feature commits:
+- ✅ `feat: Add location reference image generation`
+- ✅ `fix: Resolve schema conflict`
+- ❌ `Merge branch 'polecat/thunder/...' of github.com:...`
+
+**Rules:**
+1. ALWAYS use `git merge --ff-only` - fast-forward merges preserve original commit messages
+2. NEVER use `git pull` - it creates merge commits on conflicts
+3. On push failures (race conditions), use `git fetch` + `git reset --hard` + `git merge --ff-only`
+4. If fast-forward is impossible, the branch needs rebasing (handled in process-branch)
+
 ## Merge Flow
 
 The Refinery receives MERGE_READY mail from Witnesses when polecats complete work:
@@ -244,12 +257,66 @@ needs = ["handle-failures"]
 description = """
 Merge to main and push. CRITICAL: Notifications come IMMEDIATELY after push.
 
-**Step 1: Merge and Push**
+⚠️ **CRITICAL: NEVER USE `git pull`** ⚠️
+Using `git pull` creates merge commits which pollute main's history.
+ALL sync operations MUST use rebase.
+
+**Step 1: Merge and Push (with retry loop)**
+
 ```bash
 git checkout main
 git merge --ff-only temp
-git push origin main
 ```
+
+Now attempt push with rebase-based retry on race conditions:
+
+```bash
+# Attempt push - may fail if another refinery pushed first
+if ! git push origin main; then
+    # Push failed (race condition) - rebase and retry
+    # NEVER use `git pull` - it creates merge commits!
+    echo "Push failed, rebasing on updated main..."
+
+    # Reset main to match remote, then replay our commit
+    git fetch origin main
+    git reset --hard origin/main
+    git merge --ff-only temp
+    git push origin main
+
+    # If still failing, retry up to 3 times
+fi
+```
+
+**Retry loop for persistent race conditions:**
+```bash
+MAX_RETRIES=3
+for i in $(seq 1 $MAX_RETRIES); do
+    if git push origin main; then
+        echo "Push succeeded"
+        break
+    fi
+    if [ $i -eq $MAX_RETRIES ]; then
+        echo "Push failed after $MAX_RETRIES attempts - escalate to Mayor"
+        # Escalate: gt mail send <rig>/mayor -s "Push failing" -m "..."
+        exit 1
+    fi
+    echo "Push failed (attempt $i/$MAX_RETRIES), rebasing..."
+    git fetch origin main
+    git reset --hard origin/main
+    git merge --ff-only temp
+done
+```
+
+**FORBIDDEN OPERATIONS:**
+- ❌ `git pull` - creates merge commits
+- ❌ `git merge` without `--ff-only` - allows merge commits
+- ❌ `git pull --rebase` - still risky, use explicit fetch+reset+merge
+
+**REQUIRED PATTERN:**
+- ✅ `git fetch origin main` - get latest
+- ✅ `git reset --hard origin/main` - sync local main
+- ✅ `git merge --ff-only temp` - replay our commit
+- ✅ `git push origin main` - push
 
 ⚠️ **STOP HERE - DO NOT PROCEED UNTIL STEPS 2-3 COMPLETE**
 
